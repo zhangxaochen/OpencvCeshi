@@ -28,7 +28,7 @@ const char *iframeStr = "image_frame",
 #define _WRITE_EXTRINSICS
 
 fs::path operator+(const fs::path& lhs, const fs::path& rhs){ 
-	return fs::path(lhs) += rhs; 
+	return fs::path(lhs.string() + rhs.string());
 }
 
 void checkOpenNIError(XnStatus rc, string status){
@@ -169,6 +169,8 @@ void main(int argc, char *argv[]){
 	XnStatus rc = XN_STATUS_OK;
 	xn::DepthMetaData depthMD;
 	xn::ImageMetaData imageMD;
+	xn::IRMetaData irMD; //若无 img, 尝试用 ir 数据代替(未必有)
+	xn::MapMetaData *mmd; //父类指针可能指向 imageMD or irMD; (非实例 no appropriate default constructor available)
 
 	//2.
 	xn::Context ctx;
@@ -185,11 +187,24 @@ void main(int argc, char *argv[]){
 	xn::DepthGenerator dg;
 	rc = dg.Create(ctx);
 	checkOpenNIError(rc, "create dg");
+	bool dgOk = (rc == XN_STATUS_OK);
 
 	xn::ImageGenerator ig;
 	rc = ig.Create(ctx);
 	//rc = ctx.FindExistingNode(XN_NODE_TYPE_IMAGE, ig);
 	checkOpenNIError(rc, "create ig");
+	bool igOk = (rc == XN_STATUS_OK);
+
+	xn::IRGenerator irg;
+	rc = irg.Create(ctx);
+	checkOpenNIError(rc, "create irg");
+	bool irgOk = (rc == XN_STATUS_OK);
+	
+	xn::MapGenerator mapg;
+	if(igOk)
+		mapg = ig;
+	else if(irgOk)
+		mapg = irg;
 
 	//5. read data
 	rc = ctx.StartGeneratingAll();
@@ -199,7 +214,8 @@ void main(int argc, char *argv[]){
 	cv::Size boardSize(ww, hh);
 
 	//const char *cam_xml = "E:/GitHub/OpenniCeshi/data/CapturedFrames_openni132_7x10/cam.xml";
-	const char *cam_xml = "E:/oni_data/CapturedFrames_openni132_7x10/cam.xml";
+	//const char *cam_xml = "E:/oni_data/CapturedFrames_openni132_7x10/cam.xml";
+	const char *cam_xml = "D:/Program Files (x86)/OpenNI/Samples/Bin/Debug/CapturedFrames_ir_5x8A3/cam.xml";
 	
 	FileStorage cvfs(cam_xml, FileStorage::READ);
 
@@ -223,11 +239,11 @@ void main(int argc, char *argv[]){
 		}
 	}
 	//最后加一个 (0,0,z), 用于画Z轴调试：
-	vector<Point3f> pts2draw = boardPoints;
-	pts2draw.push_back(Point3f(0, 0, 0));
-	pts2draw.push_back(Point3f(111, 0, 0));
-	pts2draw.push_back(Point3f(0, 111, 0));
-	pts2draw.push_back(Point3f(0, 0, 111));
+	vector<Point3f> pt3fDraw = boardPoints;
+	pt3fDraw.push_back(Point3f(0, 0, 0));
+	pt3fDraw.push_back(Point3f(111, 0, 0));
+	pt3fDraw.push_back(Point3f(0, 111, 0));
+	pt3fDraw.push_back(Point3f(0, 0, 111));
 
 	vector<vector<double>> rvecs, tvecs;
 
@@ -254,9 +270,18 @@ void main(int argc, char *argv[]){
 	while(key != 27){
 		if(key == 's')
 			paused = !paused;
+		else if(key == ' ')
+			paused = true;
 
-		curDepFrameID = dg.GetFrameID();
-		curImgFrameID = ig.GetFrameID();
+		if(dgOk)
+			curDepFrameID = dg.GetFrameID();
+
+		//curImgFrameID 同时做 ig or irg 帧序号
+		//if(igOk)
+		//	curImgFrameID = ig.GetFrameID();
+		//else if(irgOk)
+		//	curImgFrameID = irg.GetFrameID();
+		curImgFrameID = mapg.GetFrameID(); //从0开始, NiViewer从1开始, 原因是bSkipFirstFrame? 不确定...
 
 		if(curDepFrameID >= maxDepFrameID)
 			maxDepFrameID = curDepFrameID;
@@ -269,7 +294,9 @@ void main(int argc, char *argv[]){
 
 		currt = clock();
 		//ctx.WaitAnyUpdateAll();
-		rc = ctx.WaitAndUpdateAll();
+		//rc = ctx.WaitAndUpdateAll();
+		rc = ctx.WaitOneUpdateAll(mapg);
+
 		//checkOpenNIError(rc, "ctx.WaitAndUpdateAll");
 		if(rc != XN_STATUS_OK){
 			cerr<<"ctx.WaitAndUpdateAll Error: "<<xnGetStatusString(rc)<<endl;
@@ -277,7 +304,17 @@ void main(int argc, char *argv[]){
 		}
 
 		dg.GetMetaData(depthMD);
-		ig.GetMetaData(imageMD);
+
+		//没法省代码, GetMetaData 非虚函数:
+		if(igOk){
+			ig.GetMetaData(imageMD);
+			mmd = &imageMD;
+		}
+		else if(irgOk){
+			irg.GetMetaData(irMD);
+			mmd = &irMD;
+		}
+
 		//curImgFrameID = ig.GetFrameID();
 		//cout<<"--curFrameID: "<<curFrameID<<", "<<dg.GetFrameID()<<endl;
 
@@ -291,9 +328,26 @@ void main(int argc, char *argv[]){
 		dm.convertTo(dm, CV_8U, 255./(dmax-dmin), -dmin*255./(dmax-dmin));
 		imshow("depth map", dm);
 
-		Mat im(imageMD.FullYRes(), imageMD.FullXRes(), CV_8UC3, (void*)imageMD.Data());
+		//Mat im(imageMD.FullYRes(), imageMD.FullXRes(), CV_8UC3, (void*)imageMD.Data());
+
+		int imgType = 0;
+		if(igOk)
+			imgType = CV_8UC3;
+		else if(irgOk)
+			imgType = CV_16UC1;
+		Mat im(mmd->FullYRes(), mmd->FullXRes(), imgType, (void*)mmd->Data());
+
 		Mat im_draw;
-		cvtColor(im, im_draw, CV_BGR2RGB);
+		if(igOk)
+			cvtColor(im, im_draw, CV_BGR2RGB);
+		else if(irgOk){
+			Mat im8u;
+			im.convertTo(im8u, CV_8UC1, 1./3);
+			//imshow("im8u", im8u); //ok√
+
+			Mat cn3[3]={im8u, im8u, im8u};
+			cv::merge(cn3, 3, im_draw);
+		}
 		//若不用 im_draw，WaitAnyUpdateAll 导致 RGB/BGR 频繁切换，闪烁：
 // 		cvtColor(im, im, CV_BGR2RGB);
 // 		imshow("color image2", im);
@@ -302,13 +356,13 @@ void main(int argc, char *argv[]){
 			<< (dt != 0 ? to_string((long long)1000/dt) : "INF")<<endl;
 		currt = clock();
 
-		vector<Point2f> ptvec;
-		bool foundCorners = cv::findChessboardCorners(im_draw, boardSize, ptvec);
+		vector<Point2f> pt2fVec;
+		bool foundCorners = cv::findChessboardCorners(im_draw, boardSize, pt2fVec);
 		//if(curImgFrameID>403)
 		if(foundCorners){
 			foundCnt++;
 
-			solvePnP(boardPoints, ptvec, intrinsics, distCoeffs, rvec, tvec);
+			solvePnP(boardPoints, pt2fVec, intrinsics, distCoeffs, rvec, tvec);
 // 			cout<<"+++++++++++++++rvec, tvec: "<<endl
 // 				<<rvec<<endl
 // 				<<tvec<<endl;
@@ -336,11 +390,11 @@ void main(int argc, char *argv[]){
 			//	<<extrinsics<<endl;
 			
 			//Mat imagePoints;
-			vector<Point2f> imagePoints; //用于对比 ptvec
+			vector<Point2f> imagePoints; //用于对比 pt2fVec
 			//zcProjectPoints(boardPoints, rvec, tvec, intrinsics, distCoeffs, imagePoints);
 			//cout<<"@@@"<<imagePoints[0]<<","<<imagePoints[1]<<endl;
 			//cv::projectPoints(boardPoints, rvec, tvec, intrinsics, distCoeffs, imagePoints);
-			cv::projectPoints(pts2draw, rvec, tvec, intrinsics, distCoeffs, imagePoints);
+			cv::projectPoints(pt3fDraw, rvec, tvec, intrinsics, distCoeffs, imagePoints);
 			//cout<<"$$$"<<imagePoints[0]<<","<<imagePoints[1]<<endl;
 			Mat im_draw2 = im_draw.clone();
 			cv::drawChessboardCorners(im_draw2, boardSize, imagePoints, foundCorners);
@@ -356,9 +410,10 @@ void main(int argc, char *argv[]){
 			cv::line(im_draw2, oo, xx, CV_RGB(255, 0, 0), 2);
 			cv::line(im_draw2, oo, yy, CV_RGB(0, 255, 0), 2);
 			cv::line(im_draw2, oo, zz, CV_RGB(0, 0, 255), 2);
-			
+			cv::putText(im_draw2, "curImgFrameID: " + std::to_string((long long) curImgFrameID), 
+				Point(0, 30), FONT_HERSHEY_SIMPLEX, 1, Scalar(255, 255, 255));
 			imshow("projectPoints", im_draw2);
-		}
+		}//if(foundCorners)
 		else{
 			notFoundCnt++;
 			cout<<"---------------!foundCorners: "<<curImgFrameID<<", "<<dg.GetFrameID()<<endl;
@@ -374,10 +429,10 @@ void main(int argc, char *argv[]){
 			<<"}";
 #endif // _WRITE_EXTRINSICS
 
-		cv::drawChessboardCorners(im_draw, boardSize, ptvec, foundCorners);
+		cv::drawChessboardCorners(im_draw, boardSize, pt2fVec, foundCorners);
 		imshow("color image", im_draw);
 		key = waitKey(paused ? 0 : 1);
-	}
+	}//while
 	cout<<"rvecs.size(): "<<rvecs.size()<<", "<<tvecs.size()<<endl
 		<<"max depth & image ID: "<<maxDepFrameID<<", "<<maxImgFrameID<<endl
 		<<"foundCnt: "<<foundCnt<<", "<<notFoundCnt<<endl;
