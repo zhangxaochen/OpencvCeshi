@@ -18,9 +18,11 @@ set(Eigen_DIR "$ENV{PCL_ROOT}/3rdParty/Eigen")
 set(EIGEN_INCLUDE_DIR "${Eigen_DIR}/include")
 
 #---------------boost
-set(BOOST_ROOT "D:/sdk/boost_1_56_0-vc10-x86")
-find_package(Boost 1.56.0 REQUIRED)
-message(STATUS "--BOOST_ROOT is: ${BOOST_ROOT}")
+#set(BOOST_ROOT "D:/sdk/boost_1_56_0-vc10-x86")
+#find_package(Boost 1.56.0 REQUIRED)
+#message(STATUS "--BOOST_ROOT is: ${BOOST_ROOT}")
+find_package(Boost REQUIRED)
+
 
 # ---------------top level:
 project(OpencvCeshi)
