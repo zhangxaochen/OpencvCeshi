@@ -5,6 +5,7 @@
 
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <ctime>
@@ -111,6 +112,7 @@ void zcProjectPoints(InputArray objectPoints,
 void main(int argc, char *argv[]){
 	//const char *default_fpath = "E:/GitHub/OpenniCeshi/data/openNI132_data_registration_4x3/test_smt_far_4x3.oni";
 	const char *default_fpath = "D:/Program Files/OpenNI/Samples/Bin/Release/smt-d100-sz35.8-r2l-t2b-refine.oni";
+	const char *def_cam_xml = "D:/Program Files (x86)/OpenNI/Samples/Bin/Debug/CapturedFrames_ir_5x8A3/cam.xml";
 	int def_ww = 4,
 		def_hh = 3;
 	float def_length = 1.;
@@ -131,12 +133,19 @@ void main(int argc, char *argv[]){
 // 		cout<<argv[0]<<endl
 // 			<<argv[1]<<endl;
 	}
+	//内参xml文件做参数, ww,hh 都从此xml读取	//2015-12-13 17:36:17
+// 	if(argc>4){
+// 		def_length = std::stof(argv[4]);
+// 	}
+	if(argc>2){
+		def_cam_xml = argv[2];
+	}
 	if(argc>3){
-		def_ww = std::stoi(argv[2]);
-		def_hh = std::stoi(argv[3]);
+		def_length = std::stof(argv[3]);
 	}
 	if(argc>4){
-		def_length = std::stof(argv[4]);
+		def_ww = std::stoi(argv[4]);
+		def_hh = std::stoi(argv[5]);
 	}
 
 	cout<<"input ONI file's absolute path:"<<endl;
@@ -159,11 +168,29 @@ void main(int argc, char *argv[]){
 	if(!fs::exists(saveFdir))
 		fs::create_directories(saveFdir);
 
+	//去畸变的深度图存放路径：	//2016-5-13 16:42:10
+	fs::path dmUndistDir = saveFdir/"dm_undistort";
+	if(!fs::exists(dmUndistDir))
+		fs::create_directories(dmUndistDir);
+
 // 	fs::directory_iterator it(saveFdir),
 // 		end_it;
 // 	while(it != end_it){
 // 		
 // 	}//while
+
+	//*.oni.txt 文件存着起始时间戳(millis)	//2015-11-23 21:12:12
+	long long startTstamp = -1; //start-timestamp
+	string tsFpath = fpath + ".txt";
+	ifstream tsFin(tsFpath);
+	if(tsFin.good()){
+		tsFin >> startTstamp;
+		cout << "startTstamp: " << startTstamp << endl;
+	}
+	else{
+		tsFin.close();
+		cout << tsFpath << " does NOT exist!" << endl;
+	}
 
 	//1.
 	XnStatus rc = XN_STATUS_OK;
@@ -211,13 +238,18 @@ void main(int argc, char *argv[]){
 
 	//---------------外定标准备
 	int ww = def_ww, hh = def_hh;
-	cv::Size boardSize(ww, hh);
+// 	cv::Size boardSize(ww, hh);
 
 	//const char *cam_xml = "E:/GitHub/OpenniCeshi/data/CapturedFrames_openni132_7x10/cam.xml";
 	//const char *cam_xml = "E:/oni_data/CapturedFrames_openni132_7x10/cam.xml";
-	const char *cam_xml = "D:/Program Files (x86)/OpenNI/Samples/Bin/Debug/CapturedFrames_ir_5x8A3/cam.xml";
+// 	const char *cam_xml = "D:/Program Files (x86)/OpenNI/Samples/Bin/Debug/CapturedFrames_ir_5x8A3/cam.xml";
 	
-	FileStorage cvfs(cam_xml, FileStorage::READ);
+	FileStorage cvfs(def_cam_xml, FileStorage::READ);
+
+	//int ww, hh;
+// 	cvfs["board_width"] >> ww; //不用此 xml 参考值, 此xml仅用于提供内参+畸变系数
+// 	cvfs["board_height"] >> hh;
+	cv::Size boardSize(ww, hh);
 
 	Mat intrinsics, distCoeffs;
 	cvfs["camera_matrix"] >> intrinsics;
@@ -249,9 +281,14 @@ void main(int argc, char *argv[]){
 
 	//保存每一RGB帧外定标 6DOF tuple：
 	fs::path extrinsics_xml = saveFdir/"extrinsics.xml";
+	fs::path extrTxt = saveFdir/"extrinsics-c6.txt"; //(t+R) 6列形式 //2016-5-8 21:33:52
+	fs::path extrTxtKf = saveFdir/"extrinsics-c12-kf.txt"; //以及在此程序中直接转到 pcl_kinfu_app 的 TSDF volume 坐标系, 且为 (t+R) 12列形式
 
 #ifdef _WRITE_EXTRINSICS
 	cv::FileStorage fst(extrinsics_xml.string(), FileStorage::WRITE);
+	ofstream foutExtrTxt(extrTxt.string(), ios::out);
+	ofstream foutExtrTxtKf(extrTxtKf.string(), ios::out);
+	
 #endif // _WRITE_EXTRINSICS
 
 	int maxImgFrameID = -1,
@@ -266,21 +303,33 @@ void main(int argc, char *argv[]){
 	//vector<double> rvec, tvec;
 	Mat rvec, tvec;
 
+	int fcnt = 0;
+
 	//while(key != 27 && (curImgFrameID = ig.GetFrameID()) >= maxImgFrameID){
 	while(key != 27){
+		fcnt++; //是循环计数器, 与 curDepFrameID 有差异, 因为即便 curDepFrameID 不更新, 此 fcnt 也会更新	//2016-5-14 12:06:14
+
 		if(key == 's')
 			paused = !paused;
 		else if(key == ' ')
 			paused = true;
 
+		currt = clock();
+		//ctx.WaitAnyUpdateAll();
+		//rc = ctx.WaitAndUpdateAll();
+		//rc = ctx.WaitOneUpdateAll(mapg);
+		rc = ctx.WaitOneUpdateAll(dg); //要存 dm-undistort 时, 使用此项 //错! dg 更新时, 可能还没有 ig, 会 crash   //2016-5-14 12:02:41
+
+		//checkOpenNIError(rc, "ctx.WaitAndUpdateAll");
+		if(rc != XN_STATUS_OK){
+			cerr<<"ctx.WaitAndUpdateAll Error: "<<xnGetStatusString(rc)<<endl;
+			break;
+		}
+
 		if(dgOk)
 			curDepFrameID = dg.GetFrameID();
 
 		//curImgFrameID 同时做 ig or irg 帧序号
-		//if(igOk)
-		//	curImgFrameID = ig.GetFrameID();
-		//else if(irgOk)
-		//	curImgFrameID = irg.GetFrameID();
 		curImgFrameID = mapg.GetFrameID(); //从0开始, NiViewer从1开始, 原因是bSkipFirstFrame? 不确定...
 
 		if(curDepFrameID >= maxDepFrameID)
@@ -291,17 +340,6 @@ void main(int argc, char *argv[]){
 			maxImgFrameID = curImgFrameID;
 		else
 			cout<<"+++++++++++++++++++++++++++++"<<endl;
-
-		currt = clock();
-		//ctx.WaitAnyUpdateAll();
-		//rc = ctx.WaitAndUpdateAll();
-		rc = ctx.WaitOneUpdateAll(mapg);
-
-		//checkOpenNIError(rc, "ctx.WaitAndUpdateAll");
-		if(rc != XN_STATUS_OK){
-			cerr<<"ctx.WaitAndUpdateAll Error: "<<xnGetStatusString(rc)<<endl;
-			break;
-		}
 
 		dg.GetMetaData(depthMD);
 
@@ -324,9 +362,23 @@ void main(int argc, char *argv[]){
 		double dmin, dmax;
 		minMaxLoc(dm, &dmin, &dmax);
 		cout<<"dmin, dmax: "<<dmin<<",\t"<<dmax<<",,"<<dm.type()<<endl;
-		//Mat dm_draw;
-		dm.convertTo(dm, CV_8U, 255./(dmax-dmin), -dmin*255./(dmax-dmin));
-		imshow("depth map", dm);
+		Mat dm8u;
+		dm.convertTo(dm8u, CV_8U, 255./(dmax-dmin), -dmin*255./(dmax-dmin));
+		imshow("depth map", dm8u);
+
+		//去畸变测试:	//2016-5-13 16:18:40
+		Mat dm_undist;
+		cv::undistort(dm, dm_undist, intrinsics, distCoeffs);
+		Mat dmundist8u;
+		dm_undist.convertTo(dmundist8u, CV_8U, 255./(dmax-dmin), -dmin*255./(dmax-dmin));
+
+		imshow("depth-map-undistort", dmundist8u);
+		//保存此去畸变的深度图
+		char buf[111];
+		sprintf(buf, "Depth_%04d.png", curDepFrameID);
+		//sprintf(buf, "Depth_%04d.png", fcnt);
+		fs::path dmUndistFn = dmUndistDir/buf;
+		imwrite(dmUndistFn.string(), dm_undist);
 
 		//Mat im(imageMD.FullYRes(), imageMD.FullXRes(), CV_8UC3, (void*)imageMD.Data());
 
@@ -382,12 +434,6 @@ void main(int argc, char *argv[]){
 // 				<<"}";
 // #endif // _WRITE_EXTRINSICS
 
-			Mat rmat;
-			cv::Rodrigues(rvec, rmat);
-			Mat extrinsics;
-			cv::hconcat(rmat, tvec, extrinsics);
-			//cout<<rmat<<endl
-			//	<<extrinsics<<endl;
 			
 			//Mat imagePoints;
 			vector<Point2f> imagePoints; //用于对比 pt2fVec
@@ -421,16 +467,64 @@ void main(int argc, char *argv[]){
 		rvecs.push_back(rvec);
 		tvecs.push_back(tvec);
 
+		Mat rmat;
+		cv::Rodrigues(rvec, rmat);
+		Mat extrinsics;
+		cv::hconcat(rmat, tvec, extrinsics);
+		//cout<<rmat<<endl
+		//	<<extrinsics<<endl;
+
 #ifdef _WRITE_EXTRINSICS
 		fst<<iframeStr+to_string(long long(curImgFrameID))<<"{"
 			<<iframeIdStr<<curImgFrameID
 			<<iframeRotStr<<rvec
 			<<iframeTransStr<<tvec
 			<<"}";
+		
+		//之前上面是写 xml, 后面在 pcl 里不知道怎么用的了 (代码丢了, 改参数 "-cv_extr_hint" 之类那部分), 所以下面改成 6列 (t+R) txt
+		foutExtrTxt//<<tvec.at<double>(0, 0)<<endl //√, 但是丑
+			<<tvecs.back()[0]<<' '
+			<<tvecs.back()[1]<<' '
+			<<tvecs.back()[2]<<' '
+			<<rvecs.back()[0]<<' '
+			<<rvecs.back()[1]<<' '
+			<<rvecs.back()[2]<<endl;
+
+		//以及 12列 (t+R) txt：
+		//double t0dBuf[3]={1.5, 1.5, -0.3}; //单位: m
+		double t0dBuf[3]={1500, 1500, -300}; //单位: mm
+		Mat t0d(3, 1, CV_64FC1, t0dBuf); //pcl_kinfu 中默认初始 tvec0, 强调 'd'epth
+
+		static Mat t0 = tvec.clone(); //static 只在第一次初始化
+		static Mat R0 = rmat.clone();
+
+		Mat Ri2 = R0 * rmat.t(); //即 Ri2 = R0 * Ri.T
+		Mat Ti2 = -R0 * rmat.t() * tvec + t0 + t0d; //Ti2 = -R0 * Ri.T * ti + t0 + t0d
+		
+		foutExtrTxtKf
+			<<Ti2.at<double>(0, 0)<<' '
+			<<Ti2.at<double>(1, 0)<<' '
+			<<Ti2.at<double>(2, 0)<<' '
+			<<Ri2.at<double>(0, 0)<<' '
+			<<Ri2.at<double>(0, 1)<<' '
+			<<Ri2.at<double>(0, 2)<<' '
+			<<Ri2.at<double>(1, 0)<<' '
+			<<Ri2.at<double>(1, 1)<<' '
+			<<Ri2.at<double>(1, 2)<<' '
+			<<Ri2.at<double>(2, 0)<<' '
+			<<Ri2.at<double>(2, 1)<<' '
+			<<Ri2.at<double>(2, 2)<<endl;
+
 #endif // _WRITE_EXTRINSICS
 
 		cv::drawChessboardCorners(im_draw, boardSize, pt2fVec, foundCorners);
 		imshow("color image", im_draw);
+
+		//去畸变测试:	//2016-5-13 16:18:40
+		Mat im_undist;
+		cv::undistort(im_draw, im_undist, intrinsics, distCoeffs);
+		imshow("color-map-undistort", im_undist);
+
 		key = waitKey(paused ? 0 : 1);
 	}//while
 	cout<<"rvecs.size(): "<<rvecs.size()<<", "<<tvecs.size()<<endl

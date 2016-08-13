@@ -9,6 +9,15 @@ using namespace Eigen;
 using namespace cv;
 
 void main(int argc, char *argv[]){
+    Matrix3f m3f;
+    vector<float> v9f(9, 1);
+    v9f.push_back(321);
+    //m3f<<v9f;
+    //m3f(v9f);
+    m3f=Matrix3f(v9f.data()+1);
+    cout<<m3f<<endl;
+    return;
+
 	MatrixXd m(2,2);
 	m(0,0) = 3;
 	m(1,0) = 2.5;
@@ -32,6 +41,10 @@ void main(int argc, char *argv[]){
 	R = AngleAxisf(0.25*M_PI, Vector3f::UnitX())
 		* AngleAxisf(1./3*M_PI, Vector3f::UnitY())
 		* AngleAxisf(0.25*M_PI, Vector3f::UnitZ());
+    cout<<"---------------b1"<<endl
+        //<<R[0]<<endl
+        <<R.row(1)<<endl
+        <<R(1,2)<<endl;
 
 	Affine3f pose = Translation3f (t) * AngleAxisf (R);
 	//Affine3f pose = AngleAxisf (R) * Translation3f (t);

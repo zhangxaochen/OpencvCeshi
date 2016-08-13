@@ -95,10 +95,10 @@ main (int argc, char** argv)
   Eigen::Affine3f transform_2 = Eigen::Affine3f::Identity();
 
   // Define a translation of 2.5 meters on the x axis.
-  //transform_2.translation() << 2.5, 0.0, 0.0;
+  transform_2.translation() << 2.5, 0.0, 0.0;
 
   // The same rotation matrix as before; tetha radians arround Z axis
-  //transform_2.rotate (Eigen::AngleAxisf (theta, Eigen::Vector3f::UnitZ()));
+  transform_2.rotate (Eigen::AngleAxisf (theta, Eigen::Vector3f::UnitZ()));
 
   // Print the transformation
   printf ("\nMethod #2: using an Affine3f\n");

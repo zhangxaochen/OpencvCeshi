@@ -26,22 +26,70 @@ fs::path operator+(const fs::path& lhs, const fs::path& rhs){
 typedef Eigen::Matrix<float, 3, 3, Eigen::RowMajor> Matrix3frm;
 //typedef Eigen::Vector3f Vector3f;
 
+//@brief mean(sum(|m1-m2|^2)) 均方误差(不开方), 对应像素都有效才计入
+float twoDmatsMSE(Mat m1, Mat m2){
+    Mat validMsk = (m1 != 0 & m2 != 0); //m1, m2 都不为零的像素
+    int validCnt = countNonZero(validMsk);
+    Mat m12diff;
+    cv::absdiff(m1, m2, m12diff);
+    m12diff.setTo(0, validMsk == 0); //去除无效区域
+    Mat m12sqr = m12diff.mul(m12diff);
+    float sumOfSqr = cv::sum(m12sqr)[0];
+    return sumOfSqr / validCnt;
+}//twoDmatsMSE
+
+//@brief testRmseTwoDmats 的单元测试
+void testTwoDmatsMSE(){
+    //python测试代码:
+    //a=ones((5,6))*3
+    //b=ones((5,6))*5
+    //a[0,:]=0
+    //b[:,0]=2
+    //msk=(a!=0)&(b!=0)
+    //c=(a-b)[msk]
+    //sum(square(c))/len(c)==3.5 #True
+
+    int rr = 5,
+        cc = 6;
+    Mat m1(rr, cc, CV_16UC1, 3);
+    Mat m2(rr, cc, CV_16UC1, 5);
+
+    m1.row(0) = 0;
+    m2.col(0) = 2;
+
+    CV_Assert(twoDmatsMSE(m1, m2) == 3.5); //已测试 @OpencvCeshi.cpp //2016-6-20 22:11:48
+    cout<<"---------------testTwoDmatsMSE OK---------------"<<endl;
+}//testTwoDmatsMSE
+
 void main(){
+    {
+        testTwoDmatsMSE();
+        return;
+    }
+
+    {
+        const char *pose_csv = "D:/Users/zhangxaochen/Desktop/a.csv";
+        CvMLData mlData;
+        mlData.read_csv(pose_csv);
+        Mat csvMat(mlData.get_values());
+        cout<<csvMat<<endl;
+        return;
+    }
 	int first[] = {5,10,15,20,20};
 	int second[] = {50,40,30,20,10};
 	std::vector<int> v(10);                      // 0  0  0  0  0  0  0  0  0  0
 	std::vector<int>::iterator vit;
 
 // 	std::sort (first,first+5);     //  5 10 15 20 25
-// 	std::sort (second,second+5);   // 10 20 30 40 50
+ 	std::sort (second,second+5);   // 10 20 30 40 50
 	vit = std::set_difference(first, first+5, second, second+5, v.begin());
 
-	return;
+	//return;
 
-	Mat cmat(2, 4, CV_8UC1, 2);
+	Mat cmat(2, 4, CV_8UC1, 200);
 	cout<<cmat<<cmat.at<char>(0,0)<<endl;
 
-	return;
+	//return;
 
 	imshow("test putText", cmat);
 	waitKey();
